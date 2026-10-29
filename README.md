@@ -33,7 +33,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          aws-region: us-west-2
       # ... your steps ...
       - uses: studykik/ops-log-workflow-result@v1
         if: always()            # run even if earlier steps failed
@@ -52,7 +52,7 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          aws-region: us-west-2
       - uses: studykik/ops-log-workflow-result@v1
         with:
           needs: ${{ toJSON(needs) }}
@@ -79,7 +79,7 @@ if all were skipped, else `success`. Per-job results are included in the event u
 ## Infrastructure
 
 `infra/` is a CDK (Python, uv) app creating the log group (retained on stack deletion) and a writer managed policy.
-Settings live in `infra/cdk.json` context (`logGroupName`, `retention`).
+Settings live in `infra/cdk.json` context (`logGroupName`, `retention`, `region`). The stack deploys to `us-west-2` (QA).
 
 ```bash
 cd infra

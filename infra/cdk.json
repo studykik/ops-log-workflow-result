@@ -2,6 +2,7 @@
   "app": "uv run python app.py",
   "context": {
     "logGroupName": "/github/workflow-results",
-    "retention": "ONE_YEAR"
+    "retention": "ONE_YEAR",
+    "region": "us-west-2"
   }
 }

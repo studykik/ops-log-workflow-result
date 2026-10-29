@@ -1,7 +1,7 @@
 # Sends real events to CloudWatch. Requires:
 #   - the infra/ stack deployed
 #   - repo variable AWS_ROLE_ARN: a role trusted for GitHub OIDC with the writer policy attached
-#   - repo variable AWS_REGION
+#   - repo variable AWS_REGION (us-west-2 for QA)
 name: Test action (AWS)
 
 on:

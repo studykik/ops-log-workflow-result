@@ -14,7 +14,7 @@ WorkflowResultsStack(
     retention=app.node.try_get_context("retention"),
     env=cdk.Environment(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION"),
+        region=app.node.try_get_context("region"),
     ),
 )
 
