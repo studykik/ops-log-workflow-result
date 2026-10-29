@@ -1,0 +1,35 @@
+# Sends real events to CloudWatch. Requires:
+#   - the infra/ stack deployed
+#   - repo variable AWS_ROLE_ARN: a role trusted for GitHub OIDC with the writer policy attached
+#   - repo variable AWS_REGION
+name: Test action (AWS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      fail:
+        description: Make the job fail on purpose
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  log-result:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Do work
+        run: |
+          if [ "${{ inputs.fail }}" = "true" ]; then exit 1; fi
+      - name: Log result
+        if: always()
+        uses: ./
+        with:
+          status: ${{ job.status }}

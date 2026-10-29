@@ -1,0 +1,88 @@
+# Exercises the action in dry-run mode (no AWS needed) and asserts the logged result.
+name: Test action
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # --- Usage 1: last step of a job, using job.status ---------------------------
+
+  succeeding-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "doing work"
+      - id: log
+        if: always()
+        uses: ./
+        with:
+          status: ${{ job.status }}
+          dry-run: "true"
+      - if: always()
+        run: test "${{ steps.log.outputs.result }}" = "success"
+
+  failing-job:
+    runs-on: ubuntu-latest
+    # Keep the workflow green even though this job fails on purpose.
+    continue-on-error: true
+    outputs:
+      result: ${{ steps.log.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: exit 1
+      - id: log
+        if: always()
+        uses: ./
+        with:
+          status: ${{ job.status }}
+          dry-run: "true"
+
+  assert-failing-job:
+    needs: failing-job
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.failing-job.outputs.result }}" = "failure"
+
+  # --- Usage 2: final job summarising the whole workflow via needs -----------
+
+  summary:
+    needs: [succeeding-job, failing-job]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: log
+        uses: ./
+        with:
+          needs: ${{ toJSON(needs) }}
+          dry-run: "true"
+      - env:
+          PAYLOAD: ${{ steps.log.outputs.payload }}
+        run: |
+          jq -e '.jobs["succeeding-job"] == "success"' <<<"$PAYLOAD"
+          jq -e '.jobs | has("failing-job")' <<<"$PAYLOAD"
+
+  # Exercises the needs-based result derivation without relying on real job results.
+  needs-derivation:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - needs: '{"a":{"result":"success"},"b":{"result":"skipped"}}'
+            expected: success
+          - needs: '{"a":{"result":"success"},"b":{"result":"failure"}}'
+            expected: failure
+          - needs: '{"a":{"result":"cancelled"},"b":{"result":"success"}}'
+            expected: cancelled
+          - needs: '{"a":{"result":"skipped"}}'
+            expected: skipped
+    steps:
+      - uses: actions/checkout@v4
+      - id: log
+        uses: ./
+        with:
+          needs: ${{ matrix.needs }}
+          dry-run: "true"
+      - run: test "${{ steps.log.outputs.result }}" = "${{ matrix.expected }}"
