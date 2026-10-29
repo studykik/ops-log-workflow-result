@@ -4,6 +4,12 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Same log group name in every region; the region comes from the AWS
+// credentials (AWS_REGION, as set by aws-actions/configure-aws-credentials).
+const LOG_GROUP = '/github/workflow-results';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function getInput(name) {
   return (process.env[`INPUT_${name.toUpperCase()}`] || '').trim();
 }
@@ -37,24 +43,42 @@ function resultFromSteps(steps) {
   return 'success';
 }
 
-// Finds the job this action is running in (matched on runner name) and
-// derives its result from the steps completed so far.
-async function currentJobResult() {
+// The jobs API lags behind the runner, so wait until it shows every main
+// step of the job as completed (post steps and "Complete job" run later).
+function mainStepsCompleted(steps) {
+  return steps.length > 0 && steps
+    .filter((s) => !s.name.startsWith('Post ') && s.name !== 'Complete job')
+    .every((s) => s.status === 'completed');
+}
+
+async function fetchJobs() {
   const env = process.env;
-  const token = getInput('github-token');
   const base = `${env.GITHUB_API_URL}/repos/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
     + `/attempts/${env.GITHUB_RUN_ATTEMPT}/jobs?per_page=100`;
-
+  const jobs = [];
   for (let page = 1; ; page++) {
     const res = await fetch(`${base}&page=${page}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+      headers: { Authorization: `Bearer ${getInput('github-token')}`, Accept: 'application/vnd.github+json' },
     });
     if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
-    const { jobs } = await res.json();
-    if (jobs.length === 0) throw new Error(`No in-progress job found for runner ${env.RUNNER_NAME}`);
-    const job = jobs.find((j) => j.status === 'in_progress' && j.runner_name === env.RUNNER_NAME);
-    if (job) return resultFromSteps(job.steps || []);
+    const body = await res.json();
+    jobs.push(...body.jobs);
+    if (jobs.length >= body.total_count || body.jobs.length === 0) return jobs;
   }
+}
+
+// Finds the job this action is running in (matched on runner name) and
+// derives its result from its steps.
+async function currentJobResult({ attempts = 30, delayMs = 2000 } = {}) {
+  let steps = [];
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const job = (await fetchJobs())
+      .find((j) => j.status === 'in_progress' && j.runner_name === process.env.RUNNER_NAME);
+    steps = (job && job.steps) || [];
+    if (mainStepsCompleted(steps)) return resultFromSteps(steps);
+    await sleep(delayMs);
+  }
+  throw new Error(`Timed out waiting for job steps to complete: ${JSON.stringify(steps)}`);
 }
 
 function buildEvent(result, jobs, env = process.env) {
@@ -78,30 +102,25 @@ function buildEvent(result, jobs, env = process.env) {
 }
 
 function streamName(env = process.env) {
-  const name = getInput('log-stream-name') || `${env.GITHUB_REPOSITORY}/${env.GITHUB_WORKFLOW}`;
   // ':' and '*' are not allowed in log stream names.
-  return name.replace(/[:*]/g, '_');
+  return `${env.GITHUB_REPOSITORY}/${env.GITHUB_WORKFLOW}`.replace(/[:*]/g, '_');
 }
 
 function aws(args) {
-  const env = { ...process.env };
-  const region = getInput('aws-region');
-  if (region) env.AWS_REGION = region;
-  return execFileSync('aws', args, { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('aws', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function putEvent(payload) {
-  const group = getInput('log-group-name');
   const stream = streamName();
   try {
-    aws(['logs', 'create-log-stream', '--log-group-name', group, '--log-stream-name', stream]);
+    aws(['logs', 'create-log-stream', '--log-group-name', LOG_GROUP, '--log-stream-name', stream]);
   } catch (e) {
     if (!String(e.stderr).includes('ResourceAlreadyExistsException')) throw new Error(String(e.stderr));
   }
   const events = JSON.stringify([{ timestamp: Date.now(), message: payload }]);
-  aws(['logs', 'put-log-events', '--log-group-name', group, '--log-stream-name', stream,
+  aws(['logs', 'put-log-events', '--log-group-name', LOG_GROUP, '--log-stream-name', stream,
     '--log-events', events]);
-  console.log(`Logged result to ${group} / ${stream}`);
+  console.log(`Logged result to ${LOG_GROUP} / ${stream}`);
 }
 
 // Logs the result. Never throws: a logging problem is reported as a warning
@@ -128,6 +147,6 @@ function logResult(result, jobs) {
 }
 
 module.exports = {
-  getInput, saveState, getState, resultFromNeeds, resultFromSteps, currentJobResult,
+  getInput, saveState, getState, resultFromNeeds, resultFromSteps, mainStepsCompleted, currentJobResult,
   buildEvent, streamName, logResult,
 };

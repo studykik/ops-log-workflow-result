@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
   actions: read   # post step reads the job's step results
-  checks: read    # assert-post-mode reads annotations
+  checks: read    # assert-job-results reads annotations
 
 jobs:
   unit-tests:
@@ -21,11 +21,11 @@ jobs:
           node-version: 24
       - run: node --test
 
-  # --- Usage 1: post step (no status/needs) ------------------------------------
+  # --- Job result, logged by the post step -------------------------------------
   # The action emits a "log-workflow-result" notice annotation with the result,
-  # which assert-post-mode checks once these jobs have finished.
+  # which assert-job-results checks once these jobs have finished.
 
-  post-succeeding-job:
+  succeeding-job:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +34,9 @@ jobs:
           dry-run: "true"
       - run: echo "doing work"
 
-  post-failing-job:
+  failing-job:
     runs-on: ubuntu-latest
+    # Keep the workflow green even though this job fails on purpose.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +45,8 @@ jobs:
           dry-run: "true"
       - run: exit 1
 
-  assert-post-mode:
-    needs: [post-succeeding-job, post-failing-job]
+  assert-job-results:
+    needs: [succeeding-job, failing-job]
     if: always()
     runs-on: ubuntu-latest
     env:
@@ -58,47 +59,10 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/check-runs/$job_id/annotations" \
               --jq '.[] | select(.title == "log-workflow-result") | .message'
           }
-          test "$(logged_result post-succeeding-job)" = "success"
-          test "$(logged_result post-failing-job)" = "failure"
+          test "$(logged_result succeeding-job)" = "success"
+          test "$(logged_result failing-job)" = "failure"
 
-  # --- Usage 2: last step of a job, using job.status ---------------------------
-  succeeding-job:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: echo "doing work"
-      - id: log
-        if: always()
-        uses: ./
-        with:
-          status: ${{ job.status }}
-          dry-run: "true"
-      - if: always()
-        run: test "${{ steps.log.outputs.result }}" = "success"
-
-  failing-job:
-    runs-on: ubuntu-latest
-    # Keep the workflow green even though this job fails on purpose.
-    continue-on-error: true
-    outputs:
-      result: ${{ steps.log.outputs.result }}
-    steps:
-      - uses: actions/checkout@v4
-      - run: exit 1
-      - id: log
-        if: always()
-        uses: ./
-        with:
-          status: ${{ job.status }}
-          dry-run: "true"
-
-  assert-failing-job:
-    needs: failing-job
-    runs-on: ubuntu-latest
-    steps:
-      - run: test "${{ needs.failing-job.outputs.result }}" = "failure"
-
-  # --- Usage 3: final job summarising the whole workflow via needs -----------
+  # --- Workflow result, logged from a final job via needs ----------------------
 
   summary:
     needs: [succeeding-job, failing-job]

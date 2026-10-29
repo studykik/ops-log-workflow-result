@@ -1,6 +1,6 @@
 # ops-log-workflow-result
 
-GitHub Action that logs the result of a workflow (or job) to an AWS CloudWatch log group.
+GitHub Action that logs the result of a workflow (or job) to AWS CloudWatch Logs.
 
 Each run writes one JSON log event like:
 
@@ -11,18 +11,14 @@ Each run writes one JSON log event like:
  "timestamp":"2026-10-29T16:27:43Z"}
 ```
 
-to the log stream `<owner>/<repo>/<workflow>` (overridable) in the log group `/github/workflow-results` (overridable).
+to the log group `/github/workflow-results` in the **region of the job's AWS credentials**, log stream
+`<owner>/<repo>/<workflow>`. There is nothing to configure: deploy the `infra/` stack to each region you use
+(e.g. `us-west-2` for QA) and the action writes to the group in whichever region the workflow authenticates to.
 
 ## Usage
 
-The job needs AWS credentials (e.g. via `aws-actions/configure-aws-credentials` with OIDC) for a role with
-`logs:CreateLogStream` and `logs:PutLogEvents` on the log group — the `infra/` stack exports a managed policy for this.
-Failing to write the log only produces a warning; it never changes the result of the job.
-
-### As a post step (recommended for single jobs)
-
-Add the action once, **after** the credentials step. It does nothing up front; when the job finishes — whether it
-succeeded, failed or was cancelled — its post step looks up the job's step results via the GitHub API and logs them.
+Add the action once, **after** the AWS credentials step. It does nothing up front; when the job finishes —
+whether it succeeded, failed or was cancelled — its post step works out the result and logs it.
 
 ```yaml
 permissions:
@@ -42,19 +38,23 @@ jobs:
       # ... your steps ...
 ```
 
-Post steps run in reverse order, so placing it after `configure-aws-credentials` means it runs before that
-action's own cleanup and still has credentials.
+The role needs `logs:CreateLogStream` and `logs:PutLogEvents` on the log group — the `infra/` stack exports a
+managed policy for this. Failing to write the log only produces a warning; it never changes the job's result.
 
-### As an explicit last step
+### How the result is determined
 
-```yaml
-      - uses: studykik/ops-log-workflow-result@v1
-        if: always()            # run even if earlier steps failed
-        with:
-          status: ${{ job.status }}
-```
+A post step can't read the `job` context (`job.status`), so it reads the current job's step results from the
+GitHub API — hence `actions: read`. It waits until the API shows every step of the job as completed, then
+logs `failure` if any step failed, `cancelled` if any was cancelled, otherwise `success`. Each run also gets a
+`log-workflow-result` notice annotation showing the result.
 
-### As a final job summarising the whole workflow
+Post steps run in reverse order, so placing the action after `configure-aws-credentials` means it runs before
+that action's own cleanup and still has credentials.
+
+### Multi-job workflows
+
+The post step logs the result of the job it is in. To log one result for the whole workflow, use it in a final
+job and pass `needs`:
 
 ```yaml
   log-result:
@@ -74,23 +74,15 @@ action's own cleanup and still has credentials.
 The overall result is `failure` if any job failed, else `cancelled` if any was cancelled, else `skipped`
 if all were skipped, else `success`. Per-job results are included in the event under `jobs`.
 
-### Inputs
+### Inputs (all optional)
 
 | Input | Default | Description |
 |---|---|---|
-| `status` | | Log this result immediately, usually `${{ job.status }}`. |
-| `needs` | | `${{ toJSON(needs) }}`; takes precedence over `status`. |
-| _(neither)_ | | Log the job result in the post step. |
-| `log-group-name` | `/github/workflow-results` | Target log group (must exist). |
-| `log-stream-name` | `<owner>/<repo>/<workflow>` | Target log stream (created if missing). |
-| `aws-region` | env `AWS_REGION` | Region of the log group. |
+| `needs` | | `${{ toJSON(needs) }}` — log the overall workflow result immediately instead of the job result. |
 | `github-token` | `${{ github.token }}` | Used by the post step to read step results (`actions: read`). |
 | `dry-run` | `false` | Build and print the event without sending it. |
 
-### Outputs
-
-`result` and `payload` (the JSON event) — set only when `status` or `needs` is given, since a post step can't
-set outputs. Every mode also adds a `log-workflow-result` notice annotation with the result to the run.
+Outputs `result` and `payload` are set only when `needs` is given, since a post step can't set outputs.
 
 ## Infrastructure
 
@@ -109,7 +101,7 @@ Requires CDK CLI >= 2.1146 for the current `aws-cdk-lib`.
 ## Tests
 
 - `node --test` — unit tests for the result/event logic.
-- `.github/workflows/test-action.yml` — runs on every push; unit tests plus all three modes in dry-run
+- `.github/workflows/test-action.yml` — runs on every push; unit tests plus both modes in dry-run
   (post-step success/failure is asserted from the run's annotations). No AWS access needed.
 - `.github/workflows/test-aws.yml` — manual (`workflow_dispatch`); sends a real event. Needs repo variables
   `AWS_ROLE_ARN` and `AWS_REGION`, and the infra stack deployed.

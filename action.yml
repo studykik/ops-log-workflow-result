@@ -1,31 +1,17 @@
 name: Log Workflow Result
 description: Log the result (success / failure / cancelled) of a GitHub Actions job or workflow to an AWS CloudWatch log group.
 
-# Modes (expressions can't be used in descriptions, so they are written without braces):
-#   - No status/needs: the result of the job is logged automatically by a post step when
-#     the job completes. Add this action near the top of the job, after AWS credentials.
-#   - status (e.g. job.status): logged immediately, for use as a last step with if: always().
-#   - needs (toJSON(needs)): the overall workflow result is derived from the jobs in needs.
+# Logs to the /github/workflow-results log group in the region of the job's AWS
+# credentials, stream "<owner>/<repo>/<workflow>".
+#
+# Add this action after the AWS credentials step. By default it does nothing up
+# front and logs the job's result from its post step when the job completes.
+# Given needs (toJSON(needs) from a final job), it instead logs the overall
+# workflow result immediately. (Expressions can't be used in this file's text.)
 
 inputs:
-  log-group-name:
-    description: CloudWatch log group to write to (must already exist - see infra/).
-    required: false
-    default: /github/workflow-results
-  log-stream-name:
-    description: Log stream to write to. Created if missing. Defaults to "<owner>/<repo>/<workflow>".
-    required: false
-    default: ""
-  status:
-    description: Result to log immediately (e.g. job.status). Leave empty to log in the post step.
-    required: false
-    default: ""
   needs:
-    description: toJSON(needs) from a final job; the overall result is derived from it. Takes precedence over status.
-    required: false
-    default: ""
-  aws-region:
-    description: AWS region of the log group. Defaults to AWS_REGION / AWS_DEFAULT_REGION from the environment.
+    description: toJSON(needs) from a final job, to log the overall workflow result instead of this job's.
     required: false
     default: ""
   github-token:
@@ -39,9 +25,9 @@ inputs:
 
 outputs:
   result:
-    description: The result logged (only set when status or needs is given).
+    description: The result logged (only set when needs is given).
   payload:
-    description: The JSON log event (only set when status or needs is given).
+    description: The JSON log event (only set when needs is given).
 
 runs:
   using: node24
