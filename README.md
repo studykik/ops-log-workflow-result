@@ -96,3 +96,10 @@ Requires CDK CLI >= 2.1146 for the current `aws-cdk-lib`.
   (success, failure, and needs-based derivation). No AWS access needed.
 - `.github/workflows/test-aws.yml` — manual (`workflow_dispatch`); sends a real event. Needs repo variables
   `AWS_ROLE_ARN` and `AWS_REGION`, and the infra stack deployed.
+
+## Releasing
+
+Releases are cut by semantic-release (`ops-version-and-release.yml`) on every push to `master`, based on
+[conventional commit](https://www.conventionalcommits.org/) messages (`fix:` → patch, `feat:` → minor,
+`feat!:` / `BREAKING CHANGE:` → major). After a release, run the **Add major tag** workflow
+(`ops-add-major-release-tag.yml`) manually to move the `v1` tag to the latest commit.
