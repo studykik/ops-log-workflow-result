@@ -12,13 +12,13 @@ inputs:
     default: ""
   status:
     description: >
-      Result to log, e.g. `${{ job.status }}`. Use this when the action is the last
+      Result to log, e.g. `job.status` (wrapped in an expression). Use this when the action is the last
       step of a job (with `if: always()`). Ignored if `needs` is provided.
     required: false
     default: ""
   needs:
     description: >
-      `${{ toJSON(needs) }}` from a final job that depends on all other jobs. The
+      `toJSON(needs)` (wrapped in an expression) from a final job that depends on all other jobs. The
       overall result is derived from the results of those jobs.
     required: false
     default: ""
