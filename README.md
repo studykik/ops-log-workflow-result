@@ -15,16 +15,20 @@ to the log stream `<owner>/<repo>/<workflow>` (overridable) in the log group `/g
 
 ## Usage
 
-The calling job must already have AWS credentials (e.g. via `aws-actions/configure-aws-credentials` with OIDC)
-for a role with `logs:CreateLogStream` and `logs:PutLogEvents` on the log group — the `infra/` stack exports a
-managed policy for this.
+The job needs AWS credentials (e.g. via `aws-actions/configure-aws-credentials` with OIDC) for a role with
+`logs:CreateLogStream` and `logs:PutLogEvents` on the log group — the `infra/` stack exports a managed policy for this.
+Failing to write the log only produces a warning; it never changes the result of the job.
 
-### As the last step of a job
+### As a post step (recommended for single jobs)
+
+Add the action once, **after** the credentials step. It does nothing up front; when the job finishes — whether it
+succeeded, failed or was cancelled — its post step looks up the job's step results via the GitHub API and logs them.
 
 ```yaml
 permissions:
   id-token: write
   contents: read
+  actions: read          # lets the post step read the job's step results
 
 jobs:
   deploy:
@@ -34,7 +38,16 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-west-2
+      - uses: studykik/ops-log-workflow-result@v1
       # ... your steps ...
+```
+
+Post steps run in reverse order, so placing it after `configure-aws-credentials` means it runs before that
+action's own cleanup and still has credentials.
+
+### As an explicit last step
+
+```yaml
       - uses: studykik/ops-log-workflow-result@v1
         if: always()            # run even if earlier steps failed
         with:
@@ -65,16 +78,19 @@ if all were skipped, else `success`. Per-job results are included in the event u
 
 | Input | Default | Description |
 |---|---|---|
-| `status` | | Result to log, usually `${{ job.status }}`. |
+| `status` | | Log this result immediately, usually `${{ job.status }}`. |
 | `needs` | | `${{ toJSON(needs) }}`; takes precedence over `status`. |
+| _(neither)_ | | Log the job result in the post step. |
 | `log-group-name` | `/github/workflow-results` | Target log group (must exist). |
 | `log-stream-name` | `<owner>/<repo>/<workflow>` | Target log stream (created if missing). |
 | `aws-region` | env `AWS_REGION` | Region of the log group. |
+| `github-token` | `${{ github.token }}` | Used by the post step to read step results (`actions: read`). |
 | `dry-run` | `false` | Build and print the event without sending it. |
 
 ### Outputs
 
-`result` — the result logged; `payload` — the JSON event.
+`result` and `payload` (the JSON event) — set only when `status` or `needs` is given, since a post step can't
+set outputs. Every mode also adds a `log-workflow-result` notice annotation with the result to the run.
 
 ## Infrastructure
 
@@ -92,8 +108,9 @@ Requires CDK CLI >= 2.1146 for the current `aws-cdk-lib`.
 
 ## Tests
 
-- `.github/workflows/test-action.yml` — runs on every push; exercises the action in dry-run mode
-  (success, failure, and needs-based derivation). No AWS access needed.
+- `node --test` — unit tests for the result/event logic.
+- `.github/workflows/test-action.yml` — runs on every push; unit tests plus all three modes in dry-run
+  (post-step success/failure is asserted from the run's annotations). No AWS access needed.
 - `.github/workflows/test-aws.yml` — manual (`workflow_dispatch`); sends a real event. Needs repo variables
   `AWS_ROLE_ARN` and `AWS_REGION`, and the infra stack deployed.
 

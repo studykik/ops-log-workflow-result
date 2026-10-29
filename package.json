@@ -14,7 +14,8 @@
     ]
   },
   "scripts": {
-    "semantic-release": "semantic-release"
+    "semantic-release": "semantic-release",
+    "test": "node --test"
   },
   "publishConfig": {
     "access": "restricted"
