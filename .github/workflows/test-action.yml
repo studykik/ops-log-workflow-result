@@ -1,0 +1,97 @@
+# Exercises the action in dry-run mode (no AWS needed) and asserts the logged result.
+name: Test action
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read       # post step reads the job's step results
+  deployments: read   # environment lookup
+  checks: read        # assert-job-results reads annotations
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test
+
+  # --- Job result, logged by the post step -------------------------------------
+  # The action emits a "log-workflow-result" notice annotation with the result,
+  # which assert-job-results checks once these jobs have finished.
+
+  succeeding-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          dry-run: "true"
+      - run: echo "doing work"
+
+  failing-job:
+    runs-on: ubuntu-latest
+    # Keep the workflow green even though this job fails on purpose.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          dry-run: "true"
+      - run: exit 1
+
+  environment-job:
+    runs-on: ubuntu-latest
+    environment: log-workflow-result-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          dry-run: "true"
+
+  assert-job-results:
+    needs: [succeeding-job, failing-job]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: |
+          logged_result() {
+            job_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+              --jq ".jobs[] | select(.name == \"$1\") | .id")
+            gh api "repos/$GITHUB_REPOSITORY/check-runs/$job_id/annotations" \
+              --jq '.[] | select(.title == "log-workflow-result") | .message'
+          }
+          test "$(logged_result succeeding-job)" = "success"
+          test "$(logged_result failing-job)" = "failure"
+
+  # --- Workflow result, logged from a final job via needs ----------------------
+
+  summary:
+    needs: [succeeding-job, failing-job, environment-job]
+    if: always()
+    runs-on: ubuntu-latest
+    env:
+      SK_DEPLOYMENT_GROUP: test-group
+    steps:
+      - uses: actions/checkout@v4
+      - id: log
+        uses: ./
+        with:
+          needs: ${{ toJSON(needs) }}
+          dry-run: "true"
+      - env:
+          PAYLOAD: ${{ steps.log.outputs.payload }}
+        run: |
+          jq -e '.jobs["succeeding-job"] == "success"' <<<"$PAYLOAD"
+          jq -e '.jobs | has("failing-job")' <<<"$PAYLOAD"
+          jq -e '.environment == "log-workflow-result-test"' <<<"$PAYLOAD"
+          jq -e '.deployment_group == "test-group"' <<<"$PAYLOAD"
+          jq -e '.triggered_by == "${{ github.triggering_actor }}"' <<<"$PAYLOAD"

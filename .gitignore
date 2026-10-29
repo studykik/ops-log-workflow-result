@@ -1,0 +1,7 @@
+.idea/
+.venv/
+__pycache__/
+*.pyc
+cdk.out/
+.pytest_cache/
+node_modules/
