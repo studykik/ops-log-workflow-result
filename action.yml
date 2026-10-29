@@ -8,14 +8,24 @@ description: Log the result (success / failure / cancelled) of a GitHub Actions 
 # front and logs the job's result from its post step when the job completes.
 # Given needs (toJSON(needs) from a final job), it instead logs the overall
 # workflow result immediately. (Expressions can't be used in this file's text.)
+#
+# Also logged when available: who triggered the run, the job's GitHub environment
+# (needs deployments read permission) and the deployment group.
 
 inputs:
   needs:
     description: toJSON(needs) from a final job, to log the overall workflow result instead of this job's.
     required: false
     default: ""
+  deployment-group:
+    description: >
+      Deployment group to log. Defaults to the SK_DEPLOYMENT_GROUP environment variable, then a
+      workflow_dispatch input named deployment_group, deploymentGroupName, groupName or deploy_group.
+      Set it in reusable workflows, whose inputs aren't visible to actions.
+    required: false
+    default: ""
   github-token:
-    description: Token used by the post step to read the job's step results (needs actions read permission).
+    description: Token used to read the job's step results and environment (needs actions and deployments read permission).
     required: false
     default: ${{ github.token }}
   dry-run:

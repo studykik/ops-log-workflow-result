@@ -1,18 +1,23 @@
 'use strict';
 
-const { getState, currentJobResult, logResult } = require('./lib');
+const {
+  getState, currentJob, runEnvironments, deploymentGroup, logResult,
+} = require('./lib');
 
 async function run() {
   if (getState('logged') === 'true') return;
 
-  let result;
+  let job = { result: 'unknown' };
   try {
-    result = await currentJobResult();
+    job = await currentJob();
   } catch (e) {
     console.log(`::warning title=log-workflow-result::Could not determine job result: ${e.message}`);
-    result = 'unknown';
   }
-  logResult(result);
+  const deployment = job.id && (await runEnvironments()).find((e) => e.jobId === job.id);
+  logResult(job.result, {
+    environment: deployment && deployment.environment,
+    deployment_group: deploymentGroup(),
+  });
 }
 
 run();

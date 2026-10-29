@@ -51,17 +51,21 @@ function mainStepsCompleted(steps) {
     .every((s) => s.status === 'completed');
 }
 
+async function githubGet(urlPath) {
+  const res = await fetch(`${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}/${urlPath}`, {
+    headers: { Authorization: `Bearer ${getInput('github-token')}`, Accept: 'application/vnd.github+json' },
+  });
+  if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 async function fetchJobs() {
   const env = process.env;
-  const base = `${env.GITHUB_API_URL}/repos/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`
-    + `/attempts/${env.GITHUB_RUN_ATTEMPT}/jobs?per_page=100`;
   const jobs = [];
   for (let page = 1; ; page++) {
-    const res = await fetch(`${base}&page=${page}`, {
-      headers: { Authorization: `Bearer ${getInput('github-token')}`, Accept: 'application/vnd.github+json' },
-    });
-    if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
-    const body = await res.json();
+    const body = await githubGet(
+      `actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}/jobs?per_page=100&page=${page}`,
+    );
     jobs.push(...body.jobs);
     if (jobs.length >= body.total_count || body.jobs.length === 0) return jobs;
   }
@@ -69,19 +73,65 @@ async function fetchJobs() {
 
 // Finds the job this action is running in (matched on runner name) and
 // derives its result from its steps.
-async function currentJobResult({ attempts = 30, delayMs = 2000 } = {}) {
+async function currentJob({ attempts = 30, delayMs = 2000 } = {}) {
   let steps = [];
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const job = (await fetchJobs())
       .find((j) => j.status === 'in_progress' && j.runner_name === process.env.RUNNER_NAME);
     steps = (job && job.steps) || [];
-    if (mainStepsCompleted(steps)) return resultFromSteps(steps);
+    if (mainStepsCompleted(steps)) return { id: job.id, result: resultFromSteps(steps) };
     await sleep(delayMs);
   }
   throw new Error(`Timed out waiting for job steps to complete: ${JSON.stringify(steps)}`);
 }
 
-function buildEvent(result, jobs, env = process.env) {
+// Parses ".../actions/runs/<run id>/job/<job id>" from a deployment status URL.
+function jobFromDeploymentUrl(url) {
+  const match = /\/actions\/runs\/(\d+)\/job\/(\d+)/.exec(url || '');
+  return match ? { runId: match[1], jobId: Number(match[2]) } : null;
+}
+
+// GitHub environments used by jobs in this run, as [{ environment, jobId }].
+// The environment isn't exposed to the job itself, but GitHub creates a
+// deployment for each job that uses one, whose status links back to the job.
+// Needs the `deployments: read` permission; returns [] if unavailable.
+async function runEnvironments() {
+  try {
+    const deployments = await githubGet(`deployments?sha=${process.env.GITHUB_SHA}&per_page=100`);
+    const found = [];
+    for (const deployment of deployments) {
+      const [status] = await githubGet(`deployments/${deployment.id}/statuses?per_page=1`);
+      const job = jobFromDeploymentUrl(status && status.log_url);
+      if (job && job.runId === process.env.GITHUB_RUN_ID) {
+        found.push({ environment: deployment.environment, jobId: job.jobId });
+      }
+    }
+    return found;
+  } catch (e) {
+    console.log(`Could not look up GitHub environment: ${e.message}`);
+    return [];
+  }
+}
+
+const DEPLOYMENT_GROUP_INPUTS = ['deployment_group', 'deploymentGroupName', 'groupName', 'deploy_group'];
+
+// Deployment group from the action input, else the SK_DEPLOYMENT_GROUP
+// environment variable, else a workflow_dispatch input with a known name.
+function deploymentGroup(env = process.env) {
+  const fromAction = getInput('deployment-group') || env.SK_DEPLOYMENT_GROUP;
+  if (fromAction) return fromAction;
+  try {
+    const inputs = JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, 'utf8')).inputs || {};
+    const name = DEPLOYMENT_GROUP_INPUTS.find((n) => inputs[n]);
+    return name ? String(inputs[name]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// `details` holds optional fields (jobs, environment, deployment_group);
+// empty ones are left out of the event.
+function buildEvent(result, details = {}, env = process.env) {
   const event = {
     result,
     repository: env.GITHUB_REPOSITORY,
@@ -94,10 +144,15 @@ function buildEvent(result, jobs, env = process.env) {
     ref: env.GITHUB_REF,
     sha: env.GITHUB_SHA,
     actor: env.GITHUB_ACTOR,
+    triggered_by: env.GITHUB_TRIGGERING_ACTOR,
     run_url: `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`,
     timestamp: new Date().toISOString(),
   };
-  if (jobs && Object.keys(jobs).length > 0) event.jobs = jobs;
+  for (const [key, value] of Object.entries(details)) {
+    const empty = value === undefined || value === null || value === ''
+      || (typeof value === 'object' && Object.keys(value).length === 0);
+    if (!empty) event[key] = value;
+  }
   return event;
 }
 
@@ -125,8 +180,8 @@ function putEvent(payload) {
 
 // Logs the result. Never throws: a logging problem is reported as a warning
 // so it can't change the outcome of the job being logged.
-function logResult(result, jobs) {
-  const payload = JSON.stringify(buildEvent(result, jobs));
+function logResult(result, details) {
+  const payload = JSON.stringify(buildEvent(result, details));
   console.log(`Workflow result: ${result}`);
   console.log(JSON.stringify(JSON.parse(payload), null, 2));
   console.log(`::notice title=log-workflow-result::${result}`);
@@ -147,6 +202,6 @@ function logResult(result, jobs) {
 }
 
 module.exports = {
-  getInput, saveState, getState, resultFromNeeds, resultFromSteps, mainStepsCompleted, currentJobResult,
-  buildEvent, streamName, logResult,
+  getInput, saveState, getState, resultFromNeeds, resultFromSteps, mainStepsCompleted, currentJob,
+  jobFromDeploymentUrl, runEnvironments, deploymentGroup, buildEvent, streamName, logResult,
 };

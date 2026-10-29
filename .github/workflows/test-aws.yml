@@ -16,6 +16,7 @@ permissions:
   id-token: write
   contents: read
   actions: read
+  deployments: read
 
 jobs:
   log-result:

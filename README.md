@@ -7,9 +7,12 @@ Each run writes one JSON log event like:
 ```json
 {"result":"failure","repository":"studykik/my-repo","workflow":"Deploy","job":"deploy",
  "run_id":"123","run_number":"45","run_attempt":"1","event":"push","ref":"refs/heads/master",
- "sha":"abc123","actor":"someone","run_url":"https://github.com/studykik/my-repo/actions/runs/123",
- "timestamp":"2026-10-29T16:27:43Z"}
+ "sha":"abc123","actor":"someone","triggered_by":"someone","run_url":"https://github.com/studykik/my-repo/actions/runs/123",
+ "timestamp":"2026-10-29T16:27:43Z","environment":"qa","deployment_group":"qa-v2"}
 ```
+
+`triggered_by` is who started this run (or re-run); `actor` is who started the original run. `environment` and
+`deployment_group` are included when available — see [Environment and deployment group](#environment-and-deployment-group).
 
 to the log group `/github/workflow-results` in the **region of the job's AWS credentials**, log stream
 `<owner>/<repo>/<workflow>`. There is nothing to configure: deploy the `infra/` stack to each region you use
@@ -25,6 +28,7 @@ permissions:
   id-token: write
   contents: read
   actions: read          # lets the post step read the job's step results
+  deployments: read      # lets it look up the job's GitHub environment
 
 jobs:
   deploy:
@@ -50,6 +54,21 @@ logs `failure` if any step failed, `cancelled` if any was cancelled, otherwise `
 
 Post steps run in reverse order, so placing the action after `configure-aws-credentials` means it runs before
 that action's own cleanup and still has credentials.
+
+### Environment and deployment group
+
+- **`environment`** — the job's GitHub environment (`environment:` in the job). GitHub doesn't expose this to
+  the job, so it is found from the deployment GitHub creates for the job (needs `deployments: read`). With
+  `needs`, it lists every environment deployed in the run, comma-separated.
+- **`deployment_group`** — the first of: the `deployment-group` input; the `SK_DEPLOYMENT_GROUP` environment
+  variable; a `workflow_dispatch` input named `deployment_group`, `deploymentGroupName`, `groupName` or
+  `deploy_group`. In a **reusable workflow** (`workflow_call`) its inputs aren't visible to actions, so pass it:
+
+  ```yaml
+      - uses: studykik/ops-log-workflow-result@v1
+        with:
+          deployment-group: ${{ inputs.deployment_group }}
+  ```
 
 ### Multi-job workflows
 
@@ -79,7 +98,8 @@ if all were skipped, else `success`. Per-job results are included in the event u
 | Input | Default | Description |
 |---|---|---|
 | `needs` | | `${{ toJSON(needs) }}` — log the overall workflow result immediately instead of the job result. |
-| `github-token` | `${{ github.token }}` | Used by the post step to read step results (`actions: read`). |
+| `deployment-group` | see above | Deployment group to log; needed in reusable workflows. |
+| `github-token` | `${{ github.token }}` | Reads step results and environment (`actions: read`, `deployments: read`). |
 | `dry-run` | `false` | Build and print the event without sending it. |
 
 Outputs `result` and `payload` are set only when `needs` is given, since a post step can't set outputs.

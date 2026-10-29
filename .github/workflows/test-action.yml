@@ -8,8 +8,9 @@ on:
 
 permissions:
   contents: read
-  actions: read   # post step reads the job's step results
-  checks: read    # assert-job-results reads annotations
+  actions: read       # post step reads the job's step results
+  deployments: read   # environment lookup
+  checks: read        # assert-job-results reads annotations
 
 jobs:
   unit-tests:
@@ -45,6 +46,15 @@ jobs:
           dry-run: "true"
       - run: exit 1
 
+  environment-job:
+    runs-on: ubuntu-latest
+    environment: log-workflow-result-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          dry-run: "true"
+
   assert-job-results:
     needs: [succeeding-job, failing-job]
     if: always()
@@ -65,9 +75,11 @@ jobs:
   # --- Workflow result, logged from a final job via needs ----------------------
 
   summary:
-    needs: [succeeding-job, failing-job]
+    needs: [succeeding-job, failing-job, environment-job]
     if: always()
     runs-on: ubuntu-latest
+    env:
+      SK_DEPLOYMENT_GROUP: test-group
     steps:
       - uses: actions/checkout@v4
       - id: log
@@ -80,3 +92,6 @@ jobs:
         run: |
           jq -e '.jobs["succeeding-job"] == "success"' <<<"$PAYLOAD"
           jq -e '.jobs | has("failing-job")' <<<"$PAYLOAD"
+          jq -e '.environment == "log-workflow-result-test"' <<<"$PAYLOAD"
+          jq -e '.deployment_group == "test-group"' <<<"$PAYLOAD"
+          jq -e '.triggered_by == "${{ github.triggering_actor }}"' <<<"$PAYLOAD"
